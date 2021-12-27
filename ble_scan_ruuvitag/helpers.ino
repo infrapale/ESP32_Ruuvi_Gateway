@@ -2,13 +2,14 @@
 #include "Arduino.h"
 #include "String.h"
 
-//Converts hexadecimal values to decimal values
-int hexadecimalToDecimal(String hexVal)
+// Converts hexadecimal values to decimal values
+uint16_t hexadecimalToDecimal(String hexVal)
 {
-    int len = hexVal.length();
-    int base = 1;
+    uint8_t len = hexVal.length();
+    uint16_t base = 1;
     int dec_val = 0;
 
+    //Serial.print("hexadecimalToDecimal(");  Serial.print(hexVal);
     for (int i = len - 1; i >= 0; i--)
     {
         if (hexVal[i] >= '0' && hexVal[i] <= '9')
@@ -23,4 +24,4 @@ int hexadecimalToDecimal(String hexVal)
         }
     }
     return dec_val;
-}
+};

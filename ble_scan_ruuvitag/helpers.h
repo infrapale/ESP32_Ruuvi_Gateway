@@ -2,6 +2,6 @@
 #define __HELPERS_H__
 
 
-int hexadecimalToDecimal(String hexVal);
+uint16_t hexadecimalToDecimal(String hexVal);
 
 #endif
