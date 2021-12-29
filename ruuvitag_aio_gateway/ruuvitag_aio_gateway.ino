@@ -49,32 +49,12 @@ typedef struct
     bool          *updated_ptr;   
 } sensor_st;
 
-typedef struct
-{
-    float    temp_fp;
-    uint16_t temperature;
-    float    humidity;
-    uint16_t pressure;
-    int16_t  acc[3];
-    uint16_t voltage_power;
-    uint16_t voltage;
-    uint16_t power;
-    uint16_t rssi;
-    uint16_t movement;
-    uint16_t measurement;
-    bool     updated;
-    
-} ruuvi_tag_data_st;
 
 int scanTime = 5; //In seconds
 BLEScan* pBLEScan;
 
 RuuviTag  ruuvi_tag;
-
-ruuvi_tag_data_st ruuvi[RUUVI_NBR_OF] = {0};
 uint8_t  sensor_indx = 0;
-//int temp, hum, pressure, ax, ay, az, voltage_power, voltage, power, rssi_ruuvi, movement, measurement;
-
 const char* ssid     = WIFI_SSID;            //Main Router      
 const char* password = WIFI_PASS;            //Main Router Password
 
@@ -85,7 +65,7 @@ Adafruit_MQTT_Publish home_od_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/
 Adafruit_MQTT_Publish home_sauna_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-sauna-temp");
 Adafruit_MQTT_Publish home_id_hum = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-indoor-hum");
 
-/// Sensor Caption and Pointers
+/// Sensor MQTT pointers, other data will be initialized in the setup function
 sensor_st sensor[NBR_SENSORS]= 
 {
     { &home_id_temp, "", VALUE_TYPE_FLOAT, NULL,NULL},
