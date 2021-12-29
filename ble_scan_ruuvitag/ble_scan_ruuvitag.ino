@@ -1,4 +1,6 @@
 /**
+ * @file ble_scan_ruuvitag.ino
+ * 
  * https://github.com/ruuvi/ruuvi-sensor-protocols/blob/master/dataformat_03.md
  * https://tutorial.cytron.io/2020/01/15/send-sensors-data-to-adafruit-io-using-esp32/
  */
@@ -13,6 +15,7 @@
 #include <esp_task_wdt.h>
 #define   WDT_TIMEOUT 10
 
+/// SSID Definitions
 #define  VILLA_ASTRID
 //#define  H_MOKKULA
 //#define PIRPANA
@@ -21,9 +24,10 @@
 #include "config.h"
 #include "helpers.h"
 
-#define NBR_SENSORS     3
-#define CAPTION_LEN     40
-#define MAC_ADDR_LEN    18
+#define NBR_SENSORS               4       ///< Number of sensor values
+#define CAPTION_LEN               40      ///< Length of value name
+#define MAC_ADDR_LEN              18      ///< Length of the BLE MAC address string
+#define MQTT_UPDATE_INTERVAL_ms   60000   ///< MQTT update interval, one value per time
 
 
 WiFiClient client;
@@ -48,7 +52,7 @@ typedef struct
     char     caption[CAPTION_LEN];
     //char     mac_addr[MAC_ADDR_LEN];
     value_type_et  value_type;
-    void     *data_ptr;
+    float     *data_ptr;
     bool     *updated_ptr;   
 } sensor_st;
 
@@ -56,7 +60,7 @@ typedef struct
 {
     float    temp_fp;
     uint16_t temperature;
-    uint16_t humidity;
+    float    humidity;
     uint16_t pressure;
     int16_t  acc[3];
     uint16_t voltage_power;
@@ -72,12 +76,11 @@ typedef struct
 int scanTime = 5; //In seconds
 BLEScan* pBLEScan;
 
-ruuvi_tag_data_st ruuvi[RUUVI_NBR_OF];
-uint8_t  mqtt_tx_state = 0;
-int temp, hum, pressure, ax, ay, az, voltage_power, voltage, power, rssi_ruuvi, movement, measurement;
-float temp_fp;
-String payload;
-//String MAC_add = "ed:9a:ab:c6:30:72"; //All the identified MAC addresses will go in one String
+ruuvi_tag_data_st ruuvi[RUUVI_NBR_OF] = {0};
+uint8_t  sensor_indx = 0;
+//int temp, hum, pressure, ax, ay, az, voltage_power, voltage, power, rssi_ruuvi, movement, measurement;
+
+
 String MAC_addr[RUUVI_NBR_OF] =
 {
     "e6:2c:8d:db:22:35",  // RUUVI_HOME_INDOOR
@@ -85,17 +88,17 @@ String MAC_addr[RUUVI_NBR_OF] =
     "ed:9a:ab:c6:30:72"   // RUUVI_HOME_SAUNA
 };
 
-const char* ssid     = WIFI_SSID;              //Main Router      
+const char* ssid     = WIFI_SSID;            //Main Router      
 const char* password = WIFI_PASS;            //Main Router Password
-//const char* url = "UBEAC GATEWAY URL HERE"; 
 
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, IO_USERNAME, IO_KEY);
 // Adafruit_MQTT_Subscribe ledControl = Adafruit_MQTT_Subscribe(&mqtt, AIO_USERNAME "/feeds/ledControl");
 Adafruit_MQTT_Publish home_id_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.esp32test-temp");
 Adafruit_MQTT_Publish home_od_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-outdoor-temp");
 Adafruit_MQTT_Publish home_sauna_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-sauna-temp");
+Adafruit_MQTT_Publish home_id_hum = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-indoor-hum");
 
-
+/// Sensor Caption and Pointers
 sensor_st sensor[NBR_SENSORS]= 
 {
     { 
@@ -109,27 +112,28 @@ sensor_st sensor[NBR_SENSORS]=
     { 
         &home_sauna_temp, "Home Sauna Temperature", VALUE_TYPE_FLOAT, 
         &ruuvi[RUUVI_HOME_SAUNA].temp_fp, &ruuvi[RUUVI_HOME_SAUNA].updated 
+    },
+    { 
+        &home_id_hum, "Home Indoor Humidity", VALUE_TYPE_FLOAT, 
+        &ruuvi[RUUVI_HOME_INDOOR].humidity, &ruuvi[RUUVI_HOME_INDOOR].updated 
     }
 };
 
 
-//Decodes RUUVI raw data and arranges it in an array
+/** 
+ *  Decodes RUUVI raw data and arranges it in an array
+ *  Decoding depends on the RuuviTag data version 
+ *  @param[in] indx,  RuuviTag index
+ *  @param[in] hex_data = raw data from the sensor
+ *  @param[in] rssi = BLR signal strength
+ */
 void decodeRuuvi(uint8_t indx, String hex_data, int rssi){
-    Serial.print("decodeRuuvi (");
-    Serial.print(indx);
-    Serial.print("): ");
-    Serial.print(hex_data);
-    //Serial.println(hex_data.substring(4, 6));
-    /**
-     *  9904034F1545C8DFFF52004E03E90B59
-     *  9904
-     *  03
-     *  4F
-     *  15 45
-     *  C8DF
-     *  FF52004E03E90B59
-     */
+    /*
+    Serial.print("decodeRuuvi ("); Serial.print(indx);
+    Serial.print("): "); Serial.print(hex_data);
     Serial.print(" "); Serial.print(hex_data.substring(4, 6)); 
+    Serial.println("");
+    */
     if(hex_data.substring(4, 6) == "03")
     {   
         ruuvi[indx].temperature = hexadecimalToDecimal(hex_data.substring(8, 10));
@@ -160,39 +164,13 @@ void decodeRuuvi(uint8_t indx, String hex_data, int rssi){
         ruuvi[indx].temperature = hexadecimalToDecimal(hex_data.substring(6, 10));
         ruuvi[indx].temp_fp = (float) ruuvi[indx].temperature * 0.005;
         ruuvi[indx].humidity = hexadecimalToDecimal(hex_data.substring(10, 14)) *0.000025;
-        ruuvi[indx].updated = true;
-         
+        ruuvi[indx].updated = true;        
     }
-    
-     Serial.println("..done");
 }
 
-//Converts decoded RUUVI data into uBeac JSON format
-void uBeacRuuvi()
-{
-    //Serial.print("uBeacRuuvi..");
-    payload = "[{\"id\": \"MyRUUVI\", \"sensors\": [{\"id\": \"Temperature\", \"value\": $temperature$}, {\"id\": \"Humidity\", \"value\": $humidity$}, "
-                     "{\"id\": \"Pressure\", \"value\": $pressure$}, {\"id\": \"Acceleration\", \"value\": {\"ax\": $ax$,\"ay\": $ay$,\"az\": $az$,}}, "
-                     "{\"id\": \"Voltage Power\", \"value\": $voltage_power$}, {\"id\": \"Voltage\", \"value\": $voltage$}, {\"id\": \"Power\", \"value\": $power$}, "
-                     "{\"id\": \"RSSI\", \"value\": $rssi$}, {\"id\": \"Movement Counter\", \"value\": $movement$}, {\"id\": \"Measurement Sequence\", \"value\": $measurement$}]}]";
-  
-    payload.replace("$temperature$",String(temp));
-    payload.replace("$humidity$",String(hum));  
-    payload.replace("$pressure$",String(pressure/100));
-    payload.replace("$ax$",String(ax*9.81/1000));
-    payload.replace("$ay$",String(ay*9.81/1000));
-    payload.replace("$az$",String(az*9.81/1000));
-    payload.replace("$voltage_power$",String(voltage_power));
-    payload.replace("$voltage$",String(voltage));
-    payload.replace("$power$",String(power));
-    payload.replace("$rssi$",String(rssi_ruuvi));
-    payload.replace("$movement$",String(movement));
-    payload.replace("$measurement$",String(measurement));
-    //Serial.println(payload);
-  
-}
-
-//Class that scans for BLE devices
+/**
+ * Class that scans for BLE devices
+ */
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks 
 {
     void onResult(BLEAdvertisedDevice advertisedDevice) 
@@ -204,11 +182,10 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
         {
             if(MAC_addr[i].indexOf(advertisedDevice.getAddress().toString().c_str()) >= 0) //If the scanned MAC address is in the identified MAC address String
             {   
-                Serial.println(advertisedDevice.getAddress().toString().c_str());
+                // Serial.println(advertisedDevice.getAddress().toString().c_str());
                 String raw_data = String(BLEUtils::buildHexData(nullptr, (uint8_t*)advertisedDevice.getManufacturerData().data(), advertisedDevice.getManufacturerData().length()));
                 raw_data.toUpperCase();
                 decodeRuuvi(i, raw_data, advertisedDevice.getRSSI());
-                //uBeacRuuvi();
                 // Serial.print("raw: "); Serial.println(raw_data);
                 break;
             }            
@@ -216,10 +193,48 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
     }
 };
 
+/**
+ * Connect to MQTT service
+ * Skip if already connected
+ * Restart (WDT) if the connection is failing
+ * 
+ */
+void MQTT_connect(void)
+{
+    int8_t ret;
+  
+    // Stop if already connected.
+    if (!mqtt.connected()) 
+    {
+        //Serial.println("Connecting to MQTT… ");      
+        uint8_t retries = 3;
+      
+        while ((ret = mqtt.connect()) != 0) 
+        { 
+            // connect will return 0 for connected
+            Serial.println(mqtt.connectErrorString(ret));
+            Serial.println("Retrying MQTT connection in 5 seconds…");
+            mqtt.disconnect();
+        
+            delay(5000);
+            if (--retries == 0) 
+            {
+                Serial.println("Retry limit reached -> WDT reset…");
+                // basically die and wait for WDT to reset me
+                while (1);
+            }
+        } 
+        Serial.println("MQTT Connected!");
+    }
+}
+
+/**
+ * Arduino setup() function
+ */
+
 void setup() 
 {
-    Serial.begin(115200);
-    
+    Serial.begin(115200);   
     //Connect to Local WiFi
     delay(4000);   //Delay needed before calling the WiFi.begin
 
@@ -231,10 +246,6 @@ void setup()
     {
         delay(1000);
         Serial.println("Connecting to WiFi..");
-    }
-    for (uint8_t i = 0; i< RUUVI_NBR_OF; i++)
-    {
-        ruuvi[i].updated = 0;
     }
  
     Serial.println("Connected to the WiFi network");
@@ -255,109 +266,29 @@ void setup()
     {
         delay(500);
         Serial.print(".");
-    }
-    
+    }   
 }
 
-
-void MQTT_connect(void)
-{
-    int8_t ret;
-  
-    // Stop if already connected.
-    if (mqtt.connected()) 
-    {
-        return;
-    }
-  
-    Serial.print("Connecting to MQTT… ");
-  
-    uint8_t retries = 3;
-  
-    while ((ret = mqtt.connect()) != 0) 
-    { 
-        // connect will return 0 for connected
-        Serial.println(mqtt.connectErrorString(ret));
-        Serial.println("Retrying MQTT connection in 5 seconds…");
-        mqtt.disconnect();
-    
-        delay(5000);
-        if (--retries == 0) {
-            // basically die and wait for WDT to reset me
-            while (1);
-        }
-    } 
-    Serial.println("MQTT Connected!");
-}
-
+/**
+ * Arduino loop() function
+ */
 void loop() 
 {
-    Serial.print("Loop ..MQTT Connect...");
     MQTT_connect();
     BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
     
     esp_task_wdt_reset();
-    Serial.print("  mqtt_tx_state = "); Serial.print(mqtt_tx_state); Serial.print("  ");
+    Serial.print("sensor_indx = "); Serial.print(sensor_indx); Serial.print("  ");
     
-    if (sensor[mqtt_tx_state]->updated)
+    if (*sensor[sensor_indx].updated_ptr)
     {
-        sensor[mqtt_tx_state]->ada_mqtt_publ->publish();
+        Serial.print(sensor[sensor_indx].caption); Serial.print("  ");
+        Serial.print(*sensor[sensor_indx].data_ptr);
+        sensor[sensor_indx].ada_mqtt_publ->publish(*sensor[sensor_indx].data_ptr);      
     }
-    switch(mqtt_tx_state)
-    {
-        case 0:
-            if (ruuvi[0].updated)
-            {    
-                ruuvi[0].ada_mqtt_publ = &home_sauna_temp;
-                if (ruuvi[0].ada_mqtt_publ-> publish(ruuvi[0].temp_fp))
-                //if (home_id_temp.publish(ruuvi[0].temp_fp))  
-                {
-                    Serial.println(ruuvi[0].temp_fp,1);
-                }
-                else    
-                {
-                    Serial.println(F("Failed"));
-                }
-                ruuvi[0].updated = false;
-             }   
-             break;
-        case 1:
-            if (ruuvi[1].updated)
-            {   
-                Serial.print("Home Outdoor Temperature: ");
-                if (home_od_temp.publish(ruuvi[1].temp_fp))    
-                {
-                    Serial.println(ruuvi[1].temp_fp,1);
-                }
-                else
-                {
-                    Serial.println(F("Failed"));
-                }
-                ruuvi[1].updated = false;
-            }
-            break;
-        case 2:
-            if (ruuvi[2].updated)
-            {   
-                Serial.print("Home Sauna Temperature: ");
-                if (home_sauna_temp.publish(ruuvi[2].temp_fp))    
-                {
-                    Serial.println(ruuvi[2].temp_fp,1);
-                }
-                else
-                {
-                    Serial.println(F("Failed"));
-                }
-                ruuvi[2].updated = false;
-            }
-            break;
-        default:
-            break;
-    }
-    ++mqtt_tx_state;
-    if(mqtt_tx_state > 2) mqtt_tx_state = 0;
+    if(++sensor_indx >= NBR_SENSORS) sensor_indx = 0;
     
-    Serial.println(" clearResults...");
+    Serial.println("");
     pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
-    delay(10000);
+    delay(MQTT_UPDATE_INTERVAL_ms);
 }
