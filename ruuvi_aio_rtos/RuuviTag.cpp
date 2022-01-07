@@ -15,7 +15,7 @@ RuuviTag::RuuviTag(void)
 
 }
 
-int8_t RuuviTag::add(String mac_address, char *loc)
+int8_t RuuviTag::add(String mac_address, const char *loc)
 {
     if (_active_indx < 0 )
     {

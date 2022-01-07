@@ -27,7 +27,7 @@ class RuuviTag
 {
     public:    
         RuuviTag(void);
-        int8_t add(String addr, char *loc);
+        int8_t add(String addr, const char *loc);
         String *get_addr(uint8_t indx);
         char   *get_location(uint8_t indx);
         void   decode_raw_data(String mac_addr, String raw_data, int rssi);
