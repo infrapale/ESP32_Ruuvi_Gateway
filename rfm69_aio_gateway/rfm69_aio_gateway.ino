@@ -1,6 +1,6 @@
 /**
- * RuuviTag Adafruit IO Gateway
- * @author TomHöglund 2021
+ * RFM69 Adafruit IO Gateway
+ * @author TomHöglund 2022
  * 
  * https://docs.espressif.com/projects/esp-idf/en/latest/esp32/index.html
  * https://github.com/adafruit/Adafruit_MQTT_Library/blob/master/Adafruit_MQTT.h
@@ -26,9 +26,9 @@
 //#define PIRPANA
 #include "secrets.h"
 
-#include "RuuviTag.h"
 #include "config.h"
 #include "helpers.h"
+#include "radio_sensors.h"
 
 #define NBR_SENSORS               4       ///< Number of sensor values
 #define CAPTION_LEN               40      ///< Length of value name
@@ -42,7 +42,24 @@
 #define LED_YELLOW            33
 #define LED_BLUE              25
 
-#define RADIO_433_I2C_ADDR    0x20
+#define RFM69_I2C_ADDR    0x20
+#define RFM69_RESET       0x01
+#define RFM69_CLR_RX      0x02
+#define RFM69_CLR_TX      0x03
+#define RFM69_GET_ID      0x05
+#define RFM69_SEND_MSG    0x10
+#define RFM69_TX_DATA     0x11
+#define RFM69_RX_AVAIL    0x40
+#define RFM69_RX_LOAD_MSG 0x41
+#define RFM69_RX_RD_MSG1  0x42
+#define RFM69_RX_RD_MSG2  0x43
+#define RFM69_RX_RD_LEN   0x44
+#define RFM69_TX_FREE     0x50
+
+#define I2C_MAX_MEG_LEN   32
+#define RFM69_MSG_LEN     64
+
+
 int scanTime = 5; //In seconds
 BLEScan* pBLEScan;
 
@@ -90,33 +107,11 @@ sensor_st sensor[NBR_SENSORS]=
     { &home_id_hum, "", VALUE_TYPE_FLOAT, NULL,NULL}
 };
 
-RuuviTag  ruuvi_tag;
 
 extern bool         loopTaskWDTEnabled;
 static TaskHandle_t htask;
 
 
-/**
- * Class that scans for BLE devices
- */
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks 
-{
-    void onResult(BLEAdvertisedDevice advertisedDevice) 
-    {
-        //Scans for specific BLE MAC addresses 
-        //Serial.println(advertisedDevice.getAddress().toString().c_str());
-        esp_task_wdt_reset();
-
-        String mac_addr = advertisedDevice.getAddress().toString().c_str();
-        String raw_data = String(BLEUtils::buildHexData(nullptr, (uint8_t*)advertisedDevice.getManufacturerData().data(), advertisedDevice.getManufacturerData().length()));
-        raw_data.toUpperCase();
-
-        ruuvi_tag.decode_raw_data(mac_addr, raw_data, advertisedDevice.getRSSI());  
-       
-        digitalWrite(LED_BLUE,HIGH);         
-    }
-    
-};
 
 
 void setup() 
@@ -150,21 +145,11 @@ void setup()
     pinMode(LED_BLUE, OUTPUT);
     digitalWrite(LED_BLUE,LOW);
 
-    Serial.println("Setup BLE Scanning...");
-    BLEDevice::init("");
-    pBLEScan = BLEDevice::getScan(); //create new scan
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    pBLEScan->setActiveScan(true); //active scan uses more power, but get results faster
-    pBLEScan->setInterval(100);
-    pBLEScan->setWindow(99);  // less or equal setInterval value
-
-    /// Refine ruuvi tag data
-    ruuvi_tag.add(String("e6:2c:8d:db:22:35"),"home_indoor");
-    ruuvi_tag.add(String("ea:78:e2:12:36:f8"),"home_sauna");
-    ruuvi_tag.add(String("ed:9a:ab:c6:30:72"),"home_outdoor");
-
     /// Refine sensors
-    strncpy(sensor[0].caption,ruuvi_tag.ruuvi[0].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
+    /*
+     * 
+    /*
+     * strncpy(sensor[0].caption,ruuvi_tag.ruuvi[0].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
     strcat(sensor[0].caption, "_temperature");
 
     strncpy(sensor[1].caption,ruuvi_tag.ruuvi[1].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
@@ -185,7 +170,7 @@ void setup()
     sensor[1].updated_ptr = &ruuvi_tag.ruuvi[1].updated;
     sensor[2].updated_ptr = &ruuvi_tag.ruuvi[2].updated;
     sensor[3].updated_ptr = &ruuvi_tag.ruuvi[0].updated;
-      
+    */
 
  
     sema_wifi_avail = xSemaphoreCreateBinary();
@@ -455,67 +440,99 @@ void TaskConnectMqtt( void *pvParameters ){
     }
 }
 
-void TaskScanBle( void *pvParameters ){
-    BaseType_t rc;
-    esp_err_t er;
-    uint8_t   state = 0;
-    BLEScanResults foundDevices;
-    
-    er = esp_task_wdt_add(nullptr);
-    assert(er == ESP_OK);
-
-    for (;;)
-    {   
-        printf("Scan BLE state: %d\n", state);
-        switch(state) {
-            case 0:   // Initial state
-                state++;
-                break; 
-            case 1:   // BLE Scan
-                foundDevices = pBLEScan->start(scanTime, false);          
-                if (digitalRead(LED_BLUE) == HIGH)
-                    digitalWrite(LED_BLUE,LOW);
-                else    
-                    digitalWrite(LED_BLUE,HIGH);    
-                esp_task_wdt_reset();
-                state++;
-                vTaskDelay(4000);           
-                break; 
-            case 2:   // Clear BLE results
-                //pBLEScan->clearResults(); 
-                esp_task_wdt_reset();
-                state--;
-                vTaskDelay(1000);
-                break; 
-        }     
-    }
-}
 
 
 void TaskReadRadio433( void *pvParameters ){
     uint8_t   state = 0;
+    uint8_t   n = 0;
+    uint8_t   msg_len;
+    char      json_msg[RFM69_MSG_LEN];
+    uint8_t   indx;
     Wire.begin();        // join i2c bus (address optional for master)
     for (;;)
     {   
         printf("Read Radio 433: %d\n", state);
         switch(state) {
             case 0:
-                Wire.requestFrom(RADIO_433_I2C_ADDR, 6);    // request 6 bytes from peripheral
+                Wire.beginTransmission( (uint8_t)RFM69_I2C_ADDR);
+                Wire.write(byte(RFM69_RESET)); 
+                Wire.endTransmission();
+                vTaskDelay(2000);
                 state++;
                 break;
+
             case 1:
+                Wire.beginTransmission( (uint8_t)RFM69_I2C_ADDR);
+                Wire.write(byte(RFM69_RX_AVAIL)); 
+                Wire.endTransmission();
+                Wire.requestFrom(RFM69_I2C_ADDR, 1);    // request 1 bytes from peripheral
+                while (Wire.available()) { // peripheral may send less than requested
+                    n = Wire.read(); // receive a byte as character
+                    printf("Number of messages %d\n",n);
+                }   
+                if (n> 0){
+                    state++;
+                     vTaskDelay(100);
+                }
+                else {
+                     vTaskDelay(2000);
+                }
+                break;
+
+            case 2:
+                Wire.beginTransmission( (uint8_t)RFM69_I2C_ADDR);
+                Wire.write(byte(RFM69_RX_LOAD_MSG)); 
+                Wire.write(byte(RFM69_RX_RD_LEN)); 
+                Wire.endTransmission();
+                Wire.requestFrom(RFM69_I2C_ADDR, 1);    // request 1 bytes from peripheral
+                while (Wire.available()) { // peripheral may send less than requested
+                    msg_len = Wire.read(); // receive a byte as character
+                    printf("msg_len = %d\n",msg_len);
+                }   
+                if (msg_len > 0){
+                    state++;
+                    vTaskDelay(100);
+                }
+                else {
+                    state = 0;
+                    vTaskDelay(2000);
+                }
+                break;
+
+            case 3:         
+                Wire.beginTransmission( (uint8_t)RFM69_I2C_ADDR);
+                Wire.write(byte(RFM69_RX_RD_MSG1)); 
+                Wire.endTransmission();
+                indx = 0;
+                json_msg[0] = 0x00;
+            
+                Wire.requestFrom(RFM69_I2C_ADDR, I2C_MAX_MEG_LEN);    // request first half message
                 while (Wire.available()) { // peripheral may send less than requested
                     char c = Wire.read(); // receive a byte as character
-                    printf("%c",c);   
-                }    
-                vTaskDelay(4000);
-                state = 0;        
-                break;
-            case 2:
-                break;
-            case 3:
+                    if (indx < RFM69_MSG_LEN) json_msg[indx++] = c;
+                    printf("%c",c);
+                }
+
+                Wire.beginTransmission( (uint8_t)RFM69_I2C_ADDR);
+                Wire.write(byte(RFM69_RX_RD_MSG2)); 
+                Wire.endTransmission();
+            
+                Wire.requestFrom(RFM69_I2C_ADDR, I2C_MAX_MEG_LEN);    // request second half message
+                while (Wire.available()) { // peripheral may send less than requested
+                    char c = Wire.read(); // receive a byte as character
+                    if (indx < RFM69_MSG_LEN) json_msg[indx++] = c;
+                    printf("%c",c);
+                }   
+                printf("\n"); 
+                parse_msg(json_msg);
+                print_radio_sensors();
+  
+                state++;
+                vTaskDelay(50);
                 break;
             case 4:
+                state = 1;
+                vTaskDelay(1000);
                 break;
         }
         digitalWrite(LED_BLUE,HIGH);
