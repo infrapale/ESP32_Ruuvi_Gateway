@@ -1,7 +1,7 @@
 #ifndef __RADIO_SENSOR_H__
 #define __RADIO_SENSOR_H__
 #include "Arduino.h"
-#define NBR_COLLECTED_SENSORS 6
+#define NBR_RADIO_SENSORS 6
 
 
 typedef struct{
@@ -16,6 +16,9 @@ typedef struct{
 
 void parse_msg(char *rad_msg);
 void print_radio_sensors(void);
+void radio_sensors_get_name(uint8_t indx, char *full_name);
+float *radio_sensors_get_value_ptr(uint8_t indx);
+bool  *radio_sensors_get_updated_ptr(uint8_t indx);
 
 
 #endif

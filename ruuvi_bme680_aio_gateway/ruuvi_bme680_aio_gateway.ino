@@ -27,8 +27,8 @@
 
 
 /// SSID Definitions
-#define  VILLA_ASTRID
-//#define  H_MOKKULA
+//#define  VILLA_ASTRID
+#define  H_MOKKULA
 //#define PIRPANA
 #include "secrets.h"
 
@@ -551,7 +551,7 @@ void TaskReadBme680( void *pvParameters ){
     er = esp_task_wdt_add(nullptr);
     assert(er == ESP_OK);
 
-    if (!bme.begin(0x76)) {
+    if (!bme.begin(0x77)) {
         while (1){
             printf("Could not find a valid BME680 sensor, check wiring!");
             vTaskDelay(10000);

@@ -1,23 +1,24 @@
-
+#include "Arduino.h"
 #include "radio_sensors.h"
+#include "app_defs.h"
 
 // {"Z":"Dock","S":"P_bmp180","V":997.00,"R":""}
 #define MSG_ATTRIBUTES 4
 
 sensor_entry_st sensor_info;
 
-sensor_entry_st collect_sens[NBR_COLLECTED_SENSORS] = {
-    {"Piha ","OD_1","Temp",-1.0,"C",1,false},
-    {"Piha ","OD_1","Temp2",-1.0,"C",1,false},   
-    {"Piha ","OD_1","Hum",42.0,"%",0, false},
-    {"Piha ","OD_1","Light1",42.0,"%",0, false},
-    {"Piha ","OD_1","Light2",42.0,"%",0, false},
-    {"Piha ","OD_1","P_mb",42.0,"%",0, false}
+sensor_entry_st collect_sens[NBR_RADIO_SENSORS] = {
+    {"piha-temp1" ,"OD_1","Temp",-1.0,"C",1,false},
+    {"piha-temp2" ,"OD_1","Temp2",-1.0,"C",1,false},   
+    {"piha-hum"   ,"OD_1","Hum",42.0,"%",0, false},
+    {"piha-light1","OD_1","Light1",42.0,"%",0, false},
+    {"piha-light2","OD_1","Light2",42.0,"%",0, false},
+    {"piha-pmb"   ,"OD_1","P_mb",42.0,"%",0, false}
 };
 
 void print_radio_sensors(void){
     printf("Test sens_db\n");
-    for( int i = 0; i < NBR_COLLECTED_SENSORS; i++){          
+    for( int i = 0; i < NBR_RADIO_SENSORS; i++){          
         printf("%S ", collect_sens[i].name);
         Serial.print(" - ");
         Serial.print(collect_sens[i].zone);
@@ -32,6 +33,32 @@ void print_radio_sensors(void){
         }
     }
 }
+void radio_sensors_get_name(uint8_t indx, char *full_name){
+    if (indx < NBR_RADIO_SENSORS) {
+        collect_sens[indx].name.toCharArray(full_name, CAPTION_LEN);
+    }
+    else{
+        full_name[0] = 0x00;   // empty string
+    }
+}
+
+float *radio_sensors_get_value_ptr(uint8_t indx){
+    if (indx < NBR_RADIO_SENSORS) {
+        return &collect_sens[indx].value;
+    }
+    else{
+        return NULL;
+    }
+}
+bool *radio_sensors_get_updated_ptr(uint8_t indx){
+    if (indx < NBR_RADIO_SENSORS) {
+        return &collect_sens[indx].updated;
+    }
+    else{
+        return NULL;
+    }
+}
+
 
 void parse_msg(char *rad_msg){
    int attr_pos[MSG_ATTRIBUTES];
@@ -77,7 +104,7 @@ void parse_msg(char *rad_msg){
          Serial.println(attributes[i]);
        }
      }
-     for( int i = 0; i < NBR_COLLECTED_SENSORS; i++)
+     for( int i = 0; i < NBR_RADIO_SENSORS; i++)
      {   
          if( attributes[0].equals(collect_sens[i].zone) &&
             attributes[1].equals(collect_sens[i].sensor))

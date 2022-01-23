@@ -21,16 +21,17 @@
 
 
 /// SSID Definitions
-#define  VILLA_ASTRID
-//#define  H_MOKKULA
+//#define  VILLA_ASTRID
+//#define  LILLA_ASTRID
+#define  H_MOKKULA
 //#define PIRPANA
 #include "secrets.h"
 
 #include "config.h"
 #include "helpers.h"
 #include "radio_sensors.h"
+#include "app_defs.h"
 
-#define NBR_SENSORS               4       ///< Number of sensor values
 #define CAPTION_LEN               40      ///< Length of value name
 #define MAC_ADDR_LEN              18      ///< Length of the BLE MAC address string
 #define MQTT_UPDATE_INTERVAL_ms   60000   ///< MQTT update interval, one value per time
@@ -78,7 +79,7 @@ typedef enum
 
 typedef struct
 {
-    Adafruit_MQTT_Publish *ada_mqtt_publ;
+    Adafruit_MQTT_Publish *aio_mqtt_publ;
     char          caption[CAPTION_LEN];
     value_type_et value_type;
     float         *data_ptr;
@@ -93,20 +94,15 @@ static SemaphoreHandle_t sema_mqtt_avail;
 
  
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, IO_USERNAME, IO_KEY);
-Adafruit_MQTT_Publish home_id_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.esp32test-temp");
-Adafruit_MQTT_Publish home_od_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-outdoor-temp");
-Adafruit_MQTT_Publish home_sauna_temp = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-sauna-temp");
-Adafruit_MQTT_Publish home_id_hum = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.tampere-ruuvi-indoor-hum");
+Adafruit_MQTT_Publish va_piha_temp1_feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.piha-temp1");
+Adafruit_MQTT_Publish va_piha_temp2_feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.piha-temp2");
+Adafruit_MQTT_Publish va_piha_hum_feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.piha-hum");
+Adafruit_MQTT_Publish va_piha_light1_feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.piha-light1");
+Adafruit_MQTT_Publish va_piha_light2_feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.piha-light2");
+Adafruit_MQTT_Publish va_piha_pmb_feed = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.piha-pmb");
 
 /// Sensor MQTT pointers, other data will be initialized in the setup function
-sensor_st sensor[NBR_SENSORS]= 
-{
-    { &home_id_temp, "", VALUE_TYPE_FLOAT, NULL,NULL},
-    { &home_sauna_temp, "", VALUE_TYPE_FLOAT, NULL,NULL}, 
-    { &home_od_temp, "", VALUE_TYPE_FLOAT, NULL,NULL}, 
-    { &home_id_hum, "", VALUE_TYPE_FLOAT, NULL,NULL}
-};
-
+sensor_st sensor[NBR_RADIO_SENSORS];
 
 extern bool         loopTaskWDTEnabled;
 static TaskHandle_t htask;
@@ -118,6 +114,7 @@ void setup()
 {
     BaseType_t rc;
     esp_err_t er;
+    char feed_name[80];
 
     htask = xTaskGetCurrentTaskHandle();
     loopTaskWDTEnabled = true;
@@ -145,34 +142,32 @@ void setup()
     pinMode(LED_BLUE, OUTPUT);
     digitalWrite(LED_BLUE,LOW);
 
-    /// Refine sensors
-    /*
-     * 
-    /*
-     * strncpy(sensor[0].caption,ruuvi_tag.ruuvi[0].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[0].caption, "_temperature");
-
-    strncpy(sensor[1].caption,ruuvi_tag.ruuvi[1].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[1].caption, "_temperature");
+    /// Define sensors
+    //memset(sensor,0x00,sizeof(sensor));
+    printf("Defining sensors: ");
+    for (uint8_t indx = 0; indx < NBR_RADIO_SENSORS; indx++){
+        radio_sensors_get_name(indx, sensor[indx].caption);
+        sensor[indx].value_type = VALUE_TYPE_FLOAT;
+        sensor[indx].data_ptr = radio_sensors_get_value_ptr(indx);
+        sensor[indx].updated_ptr = radio_sensors_get_updated_ptr(indx);
+        *sensor[indx].updated_ptr = false;
+        printf("-%d",indx);
+    }
+    printf("-done\n");
     
-    strncpy(sensor[2].caption,ruuvi_tag.ruuvi[2].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[2].caption, "_temperature");
-    
-    strncpy(sensor[3].caption,ruuvi_tag.ruuvi[0].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[3].caption, "_humidity");
-    
-    sensor[0].data_ptr = &ruuvi_tag.ruuvi[0].temp_fp;
-    sensor[1].data_ptr = &ruuvi_tag.ruuvi[1].temp_fp;
-    sensor[2].data_ptr = &ruuvi_tag.ruuvi[2].temp_fp;
-    sensor[3].data_ptr = &ruuvi_tag.ruuvi[0].humidity;
+        
+    sensor[0].aio_mqtt_publ = &va_piha_temp1_feed;
+    sensor[1].aio_mqtt_publ = &va_piha_temp2_feed;
+    sensor[2].aio_mqtt_publ = &va_piha_hum_feed;
+    sensor[3].aio_mqtt_publ = &va_piha_light1_feed;
+    sensor[4].aio_mqtt_publ = &va_piha_light2_feed;
+    sensor[5].aio_mqtt_publ = &va_piha_pmb_feed;
 
-    sensor[0].updated_ptr = &ruuvi_tag.ruuvi[0].updated;
-    sensor[1].updated_ptr = &ruuvi_tag.ruuvi[1].updated;
-    sensor[2].updated_ptr = &ruuvi_tag.ruuvi[2].updated;
-    sensor[3].updated_ptr = &ruuvi_tag.ruuvi[0].updated;
-    */
-
- 
+    
+    for (uint8_t indx = 0; indx < NBR_RADIO_SENSORS; indx++){
+        printf("%s\n",  sensor[indx].caption);
+    }
+    
     sema_wifi_avail = xSemaphoreCreateBinary();
     sema_mqtt_avail = xSemaphoreCreateBinary();
 
@@ -210,7 +205,7 @@ void StartTasks(void){
         ,  NULL 
         ,  ARDUINO_RUNNING_CORE);
     
-  
+ 
     xTaskCreatePinnedToCore(
        TaskConnectMqtt
         ,  "TaskConnectMqtt" 
@@ -220,6 +215,7 @@ void StartTasks(void){
         ,  NULL 
         ,  ARDUINO_RUNNING_CORE);
 
+
      xTaskCreatePinnedToCore(
        TaskReadRadio433
         ,  "TaskReadRadio433" 
@@ -228,7 +224,7 @@ void StartTasks(void){
         ,  3  // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
         ,  NULL 
         ,  ARDUINO_RUNNING_CORE);
-          
+         
 
     /*
      xTaskCreatePinnedToCore(
@@ -280,8 +276,8 @@ void TaskConnectWiFi( void *pvParameters ){
         {
             case 0:   // initial
                 if (WiFi.status() != WL_CONNECTED){
-                    Serial.println("Connecting WiFi");       
-                    WiFi.begin(ssid, password); 
+                    printf("Connecting WiFi: %s %s\n",ssid, password);       
+                    WiFi.begin(ssid, password);
                     retries = 6;
                     state++;
                 }
@@ -399,9 +395,9 @@ void TaskConnectMqtt( void *pvParameters ){
                     if (*sensor[sensor_indx].updated_ptr)
                     {
                         printf("%s %f\n",sensor[sensor_indx].caption,*sensor[sensor_indx].data_ptr);
-                        sensor[sensor_indx].ada_mqtt_publ->publish(*sensor[sensor_indx].data_ptr);      
+                        //sensor[sensor_indx].ada_mqtt_publ->publish(*sensor[sensor_indx].data_ptr);      
                     }
-                    if(++sensor_indx >= NBR_SENSORS) sensor_indx = 0;
+                    if(++sensor_indx >= NBR_RADIO_SENSORS) sensor_indx = 0;
                     state++;
                     interval_sec = 15;
 
@@ -443,12 +439,17 @@ void TaskConnectMqtt( void *pvParameters ){
 
 
 void TaskReadRadio433( void *pvParameters ){
-    uint8_t   state = 0;
-    uint8_t   n = 0;
-    uint8_t   msg_len;
-    char      json_msg[RFM69_MSG_LEN];
-    uint8_t   indx;
+    uint8_t     state = 0;
+    uint8_t     n = 0;
+    uint8_t     msg_len;
+    char        json_msg[RFM69_MSG_LEN];
+    uint8_t     indx;
+    BaseType_t  rc;
+    esp_err_t   er;
+    
+    er = esp_task_wdt_add(nullptr);
     Wire.begin();        // join i2c bus (address optional for master)
+    
     for (;;)
     {   
         printf("Read Radio 433: %d\n", state);
@@ -457,6 +458,7 @@ void TaskReadRadio433( void *pvParameters ){
                 Wire.beginTransmission( (uint8_t)RFM69_I2C_ADDR);
                 Wire.write(byte(RFM69_RESET)); 
                 Wire.endTransmission();
+                esp_task_wdt_reset();
                 vTaskDelay(2000);
                 state++;
                 break;
@@ -477,6 +479,7 @@ void TaskReadRadio433( void *pvParameters ){
                 else {
                      vTaskDelay(2000);
                 }
+                esp_task_wdt_reset();
                 break;
 
             case 2:
@@ -497,6 +500,7 @@ void TaskReadRadio433( void *pvParameters ){
                     state = 0;
                     vTaskDelay(2000);
                 }
+                esp_task_wdt_reset();
                 break;
 
             case 3:         
@@ -529,10 +533,12 @@ void TaskReadRadio433( void *pvParameters ){
   
                 state++;
                 vTaskDelay(50);
+                esp_task_wdt_reset();
                 break;
             case 4:
                 state = 1;
                 vTaskDelay(1000);
+                esp_task_wdt_reset();
                 break;
         }
         digitalWrite(LED_BLUE,HIGH);
