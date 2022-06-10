@@ -19,11 +19,12 @@
 #include "Adafruit_MQTT_Client.h"
 #include <esp_task_wdt.h>
 
+#define ARDUINO_RUNNING_CORE 1
 
 /// SSID Definitions
-#define  VILLA_ASTRID
+//#define  VILLA_ASTRID
 //#define  H_MOKKULA
-//#define PIRPANA
+#define PIRPANA
 #include "secrets.h"
 
 #include "RuuviTag.h"
