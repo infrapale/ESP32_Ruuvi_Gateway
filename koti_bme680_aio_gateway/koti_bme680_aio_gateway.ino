@@ -11,19 +11,19 @@
  
 #include <Wire.h>
 #include <SPI.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
-#include <BLEAddress.h>
+//#include <BLEDevice.h>
+///#include <BLEUtils.h>
+//#include <BLEScan.h>
+//#include <BLEAdvertisedDevice.h>
+//#include <BLEAddress.h>
 #include <WiFi.h>
 #include "Adafruit_MQTT.h"
 #include "Adafruit_MQTT_Client.h"
 #include <esp_task_wdt.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
-#include <bme680.h>
-#include <bme680_defs.h>
+//#include <bme680.h>
+//#include <bme680_defs.h>
 
 #define ARDUINO_RUNNING_CORE 1
 
@@ -33,11 +33,10 @@
 #define PIRPANA
 #include "secrets.h"
 
-#include "RuuviTag.h"
 #include "config.h"
 #include "helpers.h"
 
-#define NBR_SENSORS               7       ///< Number of sensor values
+#define NBR_SENSORS               3       ///< Number of sensor values
 #define CAPTION_LEN               40      ///< Length of value name
 #define MAC_ADDR_LEN              18      ///< Length of the BLE MAC address string
 #define MQTT_UPDATE_INTERVAL_ms   60000   ///< MQTT update interval, one value per time
@@ -50,7 +49,7 @@
 #define NBR_LDR_RES  5
 
 int scanTime = 5; //In seconds
-BLEScan* pBLEScan;
+//BLEScan* pBLEScan;
 Adafruit_BME680 bme; // I2C
 uint16_t ldr_value[NBR_LDR_RES];
 uint8_t  ldr_select_pin[NBR_LDR_RES] = {15,16,17,18,19};
@@ -87,15 +86,13 @@ static SemaphoreHandle_t sema_mqtt_avail;
 
  
 Adafruit_MQTT_Client mqtt(&client, AIO_SERVER, AIO_SERVERPORT, IO_USERNAME, IO_KEY);
+Adafruit_MQTT_Subscribe *subscription;
 
-//  Villa Astrid
-Adafruit_MQTT_Publish va_parvi_temp  = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.parvi-temp");
-Adafruit_MQTT_Publish va_parvi_hum   = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.parvi-hum");
-Adafruit_MQTT_Publish va_parvi_light = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.parvi-light");
-Adafruit_MQTT_Publish va_tupa_temp   = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.tupa-temp");
-Adafruit_MQTT_Publish va_tupa_hum    = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.tupa-hum");
-Adafruit_MQTT_Publish va_ulko_temp   = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.ulko-temp");
-Adafruit_MQTT_Publish va_ulko_hum    = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/villaastrid.ulko-hum");
+//  Koti
+Adafruit_MQTT_Publish koti_sisa_temp    = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.sisa-temperature");
+Adafruit_MQTT_Publish koti_sisa_hum     = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.sisa-temperature");
+Adafruit_MQTT_Publish koti_sisa_light   = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME "/feeds/home-tampere.sisa-light");
+Adafruit_MQTT_Subscribe at_home_state   = Adafruit_MQTT_Subscribe(&mqtt, IO_USERNAME "/feeds/home-tampere.at-home-state");
 
 
 
@@ -103,43 +100,29 @@ Adafruit_MQTT_Publish va_ulko_hum    = Adafruit_MQTT_Publish(&mqtt, IO_USERNAME 
 /// Sensor MQTT pointers, other data will be initialized in the setup function
 sensor_st sensor[NBR_SENSORS]= 
 {
-    { &va_tupa_temp, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
-    { &va_tupa_hum, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
-    { &va_ulko_temp, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
-    { &va_ulko_hum, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false},
-    { &va_parvi_temp, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false},
-    { &va_parvi_hum, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
-    { &va_parvi_light, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
+    { &koti_sisa_temp, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
+    { &koti_sisa_hum, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
+    { &koti_sisa_light, "", VALUE_TYPE_FLOAT, NULL,NULL,0.0,false}, 
 };
 
-RuuviTag  ruuvi_tag;
 
 extern bool         loopTaskWDTEnabled;
 static TaskHandle_t htask;
 
 
-/**
- * Class that scans for BLE devices
- */
-class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks 
+void at_home_state_callback(char *data, uint16_t len)
 {
-    void onResult(BLEAdvertisedDevice advertisedDevice) 
+    Serial.print("at home state: ");
+    Serial.println(data);
+    if ((strcmp(data,"On") == 0))
     {
-        //Scans for specific BLE MAC addresses 
-        //Serial.println(advertisedDevice.getAddress().toString().c_str());
-        esp_task_wdt_reset();
-
-        String mac_addr = advertisedDevice.getAddress().toString().c_str();
-        String raw_data = String(BLEUtils::buildHexData(nullptr, (uint8_t*)advertisedDevice.getManufacturerData().data(), advertisedDevice.getManufacturerData().length()));
-        raw_data.toUpperCase();
-
-        ruuvi_tag.decode_raw_data(mac_addr, raw_data, advertisedDevice.getRSSI());  
-       
+        digitalWrite(LED_YELLOW,HIGH);
     }
-    
-};
-
-
+    else
+    {
+        digitalWrite(LED_YELLOW,LOW);
+    }
+}
 
 void setup() 
 {
@@ -163,62 +146,25 @@ void setup()
         printf("Task is subscribed to TWDT.\n");
     }
     
-    pinMode(LED_YELLOW, OUTPUT);
-    digitalWrite(LED_YELLOW,LOW);
+    TaskHandle_t h = xTaskGetIdleTaskHandle();
+    er = esp_task_wdt_status(h);
+    if ( er != ESP_OK ) 
+    {
+        er = esp_task_wdt_add(h); // Add Idle task
+        assert(er == ESP_OK);
+    }
 
-    Serial.println("Setup BLE Scanning...");
-    BLEDevice::init("");
-    pBLEScan = BLEDevice::getScan(); //create new scan
-    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
-    pBLEScan->setActiveScan(true); //active scan uses more power, but get results faster
-    pBLEScan->setInterval(100);
-    pBLEScan->setWindow(99);  // less or equal setInterval value
-    
+    at_home_state.setCallback(at_home_state_callback);
+    mqtt.subscribe(&at_home_state);
+
     pinMode(LED_YELLOW, OUTPUT);
     digitalWrite(LED_YELLOW,LOW);
 
     pinMode(LDR_PIN,INPUT);
     //select_ldr(0);
 
-    /// Refine ruuvi tag data
-    //ruuvi_tag.add(String("e6:2c:8d:db:22:35"),"home_indoor");
-    ruuvi_tag.add(String("ea:78:e2:12:36:f8"),"va_tupa");
-    ruuvi_tag.add(String("ed:9a:ab:c6:30:72"),"va_outdoor");
-
-    /// Ruuvi Sensors
-    strncpy(sensor[0].caption,ruuvi_tag.ruuvi[0].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[0].caption, "_temperature");
-
-    strncpy(sensor[1].caption,ruuvi_tag.ruuvi[0].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[1].caption, "_humidity");
-
-    strncpy(sensor[2].caption,ruuvi_tag.ruuvi[1].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[2].caption, "_temperature");
     
-    strncpy(sensor[3].caption,ruuvi_tag.ruuvi[1].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    strcat(sensor[3].caption, "_humidity");
-    
-    // BME680 Sensors    
-    strcpy(sensor[4].caption,"va_parvi_temperature");
-    strcpy(sensor[5].caption,"va_parvi_humidity");
-    // LDR Sensor
-    strcpy(sensor[6].caption,"va_parvi_light");
-
-    //strncpy(sensor[2].caption,ruuvi_tag.ruuvi[2].location,CAPTION_LEN-RUUVI_LOCATION_LEN);
-    //strcat(sensor[2].caption, "_temperature");
-    
-    
-    sensor[0].data_ptr = &ruuvi_tag.ruuvi[0].temp_fp;
-    sensor[1].data_ptr = &ruuvi_tag.ruuvi[0].humidity;
-    sensor[2].data_ptr = &ruuvi_tag.ruuvi[1].temp_fp;
-    sensor[3].data_ptr = &ruuvi_tag.ruuvi[1].humidity;
-
-    sensor[0].updated_ptr = &ruuvi_tag.ruuvi[0].updated;
-    sensor[1].updated_ptr = &ruuvi_tag.ruuvi[0].updated;
-    sensor[2].updated_ptr = &ruuvi_tag.ruuvi[1].updated;
-    sensor[3].updated_ptr = &ruuvi_tag.ruuvi[1].updated;
-
-    for (uint8_t i = 4; i < 7;i++){
+    for (uint8_t i = 0; i < NBR_SENSORS; i++){
         sensor[i].data_ptr    = &sensor[i].value;
         sensor[i].updated_ptr = &sensor[i].updated;       
     }
@@ -231,6 +177,7 @@ void setup()
     rc = xSemaphoreGive(sema_wifi_avail);
     rc = xSemaphoreGive(sema_mqtt_avail);
     StartTasks();
+
 }
 
 void loop() {
@@ -238,19 +185,19 @@ void loop() {
     er = esp_task_wdt_add(nullptr);
     er = esp_task_wdt_status(htask);
     assert(er == ESP_OK);
-    esp_task_wdt_reset();
+    esp_task_wdt_reset();    
+    
     vTaskDelay(1000);
 }
 
 void StartTasks(void){
     BaseType_t rc;
-
+    
     rc = xSemaphoreTake(sema_wifi_avail,portMAX_DELAY);
     assert(rc == pdPASS);
     rc = xSemaphoreTake(sema_mqtt_avail,portMAX_DELAY);
     assert(rc == pdPASS);
 
-    
     xTaskCreatePinnedToCore(
        TaskConnectWiFi
         ,  "TaskConnectWiFi" 
@@ -260,7 +207,7 @@ void StartTasks(void){
         ,  NULL 
         ,  ARDUINO_RUNNING_CORE);
     
-  
+    
     xTaskCreatePinnedToCore(
        TaskConnectMqtt
         ,  "TaskConnectMqtt" 
@@ -269,18 +216,8 @@ void StartTasks(void){
         ,  2  // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
         ,  NULL 
         ,  ARDUINO_RUNNING_CORE);
-
-    /*
-    xTaskCreatePinnedToCore(
-       TaskScanBle
-        ,  "TaskScanBle" 
-        ,  4096  // This stack size can be checked & adjusted by reading the Stack Highwater
-        ,  NULL
-        ,  1  // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
-        ,  NULL 
-        ,  ARDUINO_RUNNING_CORE);
-    */
-
+    
+    
     xTaskCreatePinnedToCore(
        TaskReadBme680
         ,  "TaskReadBme680"   // A name just for humans
@@ -299,29 +236,10 @@ void StartTasks(void){
         ,  NULL 
         ,  ARDUINO_RUNNING_CORE);            
     
-    /*
-    xTaskCreatePinnedToCore(
-       TaskSendMqtt
-        ,  "TaskSendMqtt" 
-        ,  1024  // This stack size can be checked & adjusted by reading the Stack Highwater
-        ,  NULL
-        ,  2  // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
-        ,  NULL 
-        ,  ARDUINO_RUNNING_CORE);
     
-    xTaskCreatePinnedToCore(
-       TaskReadBme680
-        ,  "TaskSendMqtt" 
-        ,  1024  // This stack size can be checked & adjusted by reading the Stack Highwater
-        ,  NULL
-        ,  2  // Priority, with 3 (configMAX_PRIORITIES - 1) being the highest, and 0 being the lowest.
-        ,  NULL 
-        ,  ARDUINO_RUNNING_CORE);
-    
-      */
 }
 
-void TaskConnectWiFi( void *pvParameters ){
+static void TaskConnectWiFi( void *pvParameters ){
     uint8_t state;
     int8_t  ret;
     uint8_t retries = 6;
@@ -334,7 +252,7 @@ void TaskConnectWiFi( void *pvParameters ){
     
     for (;;)
     {
-        //printf("WiFi state: %d\n", state);
+        printf("WiFi state: %d\n", state);
         switch(state)
         {
             case 0:   // initial
@@ -349,13 +267,11 @@ void TaskConnectWiFi( void *pvParameters ){
                 break;
             case 1:   // Check for the connection
                 if (WiFi.status() != WL_CONNECTED) {
-                    digitalWrite(LED_YELLOW,LOW);
                     vTaskDelay(1000);
                     if (--retries == 0) state = 3;
                     else Serial.println("Waiting for WiFi"); 
                 }
                 else {
-                    digitalWrite(LED_YELLOW,HIGH);
                     Serial.println("Connected to WiFi");
                     rc = xSemaphoreGive(sema_wifi_avail);
                     state = 2;
@@ -386,12 +302,13 @@ void TaskConnectMqtt( void *pvParameters ){
     esp_err_t er;
     uint8_t   wifi_timeout;
     uint8_t   mqtt_timeout;
-    uint8_t   sensor_indx;
+    uint8_t   sensor_indx = 0;
     uint8_t   interval_sec;
     
     state = 0;
     er = esp_task_wdt_add(nullptr);
     assert(er == ESP_OK);
+    mqtt.subscribe(&at_home_state);
     
     for (;;)
     { 
@@ -417,18 +334,21 @@ void TaskConnectMqtt( void *pvParameters ){
                 vTaskDelay(1000);
                 break;
             case 3: // WiFi is available
-                if (mqtt.connected()){
+                if (mqtt.connected())
+                {
                     printf("MQTT was already connected\n");
                     state++;
                 }
-                else {                
+                else 
+                {                
                     printf("Connecting to MQTT…\n ");  
                     if (WiFi.status() != WL_CONNECTED)
                     {
                         printf("WiFi is not connected\n ");  
                         state = 99;  //restart
                     }
-                    else{
+                    else
+                    {
                         ret = mqtt.connect();
                         if (ret != 0) {    // connect will return 0 for connected
                             printf("%s\n",mqtt.connectErrorString(ret));
@@ -443,7 +363,7 @@ void TaskConnectMqtt( void *pvParameters ){
                         }
                     }
                 }
-                
+                break;
             case 4: // MQTT is connected
                 printf("MQTT is Connected!\n"); 
                 rc = xSemaphoreGive(sema_mqtt_avail);
@@ -452,7 +372,8 @@ void TaskConnectMqtt( void *pvParameters ){
                 vTaskDelay(100);
                 break;
             case 5: // MQTT actions
-                if (mqtt.connected()){
+                if (mqtt.connected())
+                {
                     if (*sensor[sensor_indx].updated_ptr)
                     {
                         printf("%s %f\n",sensor[sensor_indx].caption,*sensor[sensor_indx].data_ptr);
@@ -462,22 +383,23 @@ void TaskConnectMqtt( void *pvParameters ){
                     state++;
                     interval_sec = 15;
 
-                } else {
-                    interval_sec = 15;
+                } else 
+                {
+                    interval_sec = 60;
                     state = 99;
                 }
                 esp_task_wdt_reset();
                 vTaskDelay(1000);
                 break;
 
-            case 6: // Release WiFI and MQTT
-                mqtt.disconnect();  
-                rc = xSemaphoreGive(sema_wifi_avail);  
+            case 6: 
+                rc = xSemaphoreGive(sema_wifi_avail);
                 state++;
                 break;
 
             case 7: //Wait for next MQTT update
                 if(--interval_sec == 0) state = 1;
+                //mqtt.processPackets(1000);
                 esp_task_wdt_reset();
                 vTaskDelay(1000);          
                 break;
@@ -489,43 +411,11 @@ void TaskConnectMqtt( void *pvParameters ){
                 vTaskDelay(10000);
                 break;
             default:
-                printf("Fatal error: incorrect MQTT state -> WDT reset…\n");
+                printf("Fatal error: incorrect MQTT state -> WDT reset…%d\n",state);
                 vTaskDelay(100);
                 state = 99;
                 break;           
         }
-    }
-}
-
-void TaskScanBle( void *pvParameters ){
-    BaseType_t rc;
-    esp_err_t er;
-    uint8_t   state = 0;
-    BLEScanResults foundDevices;
-    
-    er = esp_task_wdt_add(nullptr);
-    assert(er == ESP_OK);
-
-    for (;;)
-    {   
-        printf("Scan BLE state: %d\n", state);
-        switch(state) {
-            case 0:   // Initial state
-                state++;
-                break; 
-            case 1:   // BLE Scan
-                foundDevices = pBLEScan->start(scanTime, false);          
-                esp_task_wdt_reset();
-                state++;
-                vTaskDelay(4000);           
-                break; 
-            case 2:   // Clear BLE results
-                //pBLEScan->clearResults(); 
-                esp_task_wdt_reset();
-                state--;
-                vTaskDelay(1000);
-                break; 
-        }     
     }
 }
 
@@ -561,10 +451,10 @@ void TaskReadBme680( void *pvParameters ){
             if (!bme.endReading()) {
                 printf("Failed to complete reading\n");
             }
-            sensor[4].value = bme.temperature;
-            sensor[4].updated = true;
-            sensor[5].value = bme.humidity;
-            sensor[5].updated = true;
+            sensor[0].value = bme.temperature;
+            sensor[0].updated = true;
+            sensor[1].value = bme.humidity;
+            sensor[1].updated = true;
             
         }
         vTaskDelay(4000);     
@@ -589,8 +479,8 @@ void TaskReadLight( void *pvParameters ){
         //select_ldr(ldr_indx);
         esp_task_wdt_reset();
  
-        sensor[6].value = (float) ldr_value[3];
-        sensor[6].updated = true;
+        sensor[2].value = (float) ldr_value[3];
+        sensor[2].updated = true;
         vTaskDelay(2000);       
     }
 }
